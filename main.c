@@ -18,9 +18,13 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "dma.h"
 #include "i2c.h"
+#include "tim.h"
 #include "usart.h"
 #include "gpio.h"
+#include <math.h>
+#include <stdlib.h>
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -51,37 +55,22 @@
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+/*void delay_us (uint16_t us)
+ {
+ 	__HAL_TIM_SET_COUNTER(&htim1,0);  // set the counter value a 0
+ 	while (__HAL_TIM_GET_COUNTER(&htim1) < us);  // wait for the counter to reach the us input in the parameter
+ }
 
+void delay_ms (uint16_t us)
+ {
+ 	__HAL_TIM_SET_COUNTER(&htim1,0);  // set the counter value a 0
+ 	while (__HAL_TIM_GET_COUNTER(&htim1) < us * 1000);  // wait for the counter to reach the us input in the parameter
+ }*/
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define DIR_PIN GPIO_PIN_0
-#define DIR_PORT GPIOC
-#define STEP_PIN GPIO_PIN_1
-#define STEP_PORT GPIOC
 
-void microDelay (uint16_t delay)
-{
-  __HAL_TIM_SET_COUNTER(&htim1, 0);
-  while (__HAL_TIM_GET_COUNTER(&htim1) < delay);
-}
-
-void step (int steps, uint8_t direction, uint16_t delay)
-{
-  int x;
-  if (direction == 0)
-    HAL_GPIO_WritePin(DIR_PORT, DIR_PIN, GPIO_PIN_SET);
-  else
-    HAL_GPIO_WritePin(DIR_PORT, DIR_PIN, GPIO_PIN_RESET);
-  for(x=0; x<steps; x=x+1)
-  {
-    HAL_GPIO_WritePin(STEP_PORT, STEP_PIN, GPIO_PIN_SET);
-    microDelay(delay);
-    HAL_GPIO_WritePin(STEP_PORT, STEP_PIN, GPIO_PIN_RESET);
-    microDelay(delay);
-  }
-}
 /* USER CODE END 0 */
 
 /**
@@ -113,26 +102,66 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_I2C1_Init();
+  MX_TIM1_Init();
+  MX_TIM3_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start(&htim1);
+  HAL_TIM_Base_Start(&htim3);
+  __HAL_TIM_SET_COUNTER(&htim3,0);
+  __HAL_TIM_SET_COUNTER(&htim1,0);
+
+
+  int ServoPWM1 = 1500;
+  int ServoPWM2 = 1500;
+//  TIM3->CCR2 = ServoPWM2;
+
+  TIM3->CCR1 = ServoPWM1;
+  TIM3->CCR2 = ServoPWM2;
+  TIM1->CCR1 = 20000;	//make fan work at 100%duty cycle,  could make it work harder though
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_Delay(4000);
+  //TIM3->CCR1 = 1500; // stop
+  //HAL_Delay(500);
+  //TIM3->CCR1 = 1420; //start
+  //HAL_Delay(4000);
+  //TIM3->CCR1 = 1500; // stop
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-   {
-     int y;
-     for(y=0; y<8; y=y+1) // 8 times
-     {
-       step(25, 0, 800); // 25 steps (45 degrees) CCV
-       HAL_Delay(500);
-     }
-     step(800, 1, 5000); // 800 steps (4 revolutions ) CV
-     HAL_Delay(1000);
-    /* USER CODE END WHILE */
+  {
+	  TIM3->CCR2 = 1515; // start
+	  TIM3->CCR1 = 1560;
+	  HAL_Delay(600);
+	  TIM3->CCR2 = 1500; // stop
+	  TIM3->CCR1 = 1500;
+	  HAL_Delay(1000);
+	  TIM3->CCR2 = 1446; // start
+	  TIM3->CCR1 = 1400;
+	  HAL_Delay(600);
+	  TIM3->CCR2 = 1500; // stop
+	  TIM3->CCR1 = 1500;
+	  HAL_Delay(1000);
+	 /* HAL_Delay(1000);
+
+	  ServoPWM2 = 1500;
+	  TIM3->CCR2 = ServoPWM2;
+	  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+	  HAL_Delay(20000);
+
+	  ServoPWM2 = 1460;
+	  TIM3->CCR2 = ServoPWM2;
+	  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+*/
+	/* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
@@ -159,7 +188,12 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSIDiv = RCC_HSI_DIV1;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
+  RCC_OscInitStruct.PLL.PLLN = 8;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -169,11 +203,11 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
     Error_Handler();
   }
