@@ -10,69 +10,71 @@
 #include <vector>
 #include <cstdio>
 
-#include "Data_Link_Layer.h"   // provides framePacket()
-#include "Network_Layer.h"     // provides encodeNetworkPacket()
-#include "Application_Layer.h" // provides encodeApplicationData() and defines LIS3DHData, LIS2MDLData
+// For UDP sockets on macOS/Linux
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+// Include your layered protocol headers
+#include "Data_Link_Layer.h"   // framePacket(), unframePacket()
+#include "Network_Layer.h"     // encodeNetworkPacket(), decodeNetworkPacket()
+#include "Application_Layer.h" // encodeApplicationData(), LIS3DHData, LIS2MDLData
 
 int main() {
-    // Adjust this to match your serial device (e.g., "/dev/tty.usbmodem21401")
-    const char* portName = "/dev/tty.usbmodem21401";
-
-    // Open the serial port.
+    // 1. OPEN & CONFIGURE SERIAL PORT
+    const char* portName = "/dev/tty.usbmodem21401";  // <-- Adjust to your actual device
     int fd = open(portName, O_RDWR | O_NOCTTY | O_NDELAY);
     if (fd == -1) {
         std::cerr << "Error opening serial port " << portName
                   << ": " << strerror(errno) << std::endl;
         return 1;
     }
-    // Clear non-blocking flag.
+    // Make read() blocking
     fcntl(fd, F_SETFL, 0);
 
-    // Configure the serial port.
     struct termios options;
     tcgetattr(fd, &options);
     cfsetispeed(&options, B115200);
     cfsetospeed(&options, B115200);
-    options.c_cflag |= (CLOCAL | CREAD);  // enable receiver, local mode
-    options.c_cflag &= ~PARENB;           // no parity
-    options.c_cflag &= ~CSTOPB;           // one stop bit
+    options.c_cflag |= (CLOCAL | CREAD);
+    options.c_cflag &= ~PARENB; // no parity
+    options.c_cflag &= ~CSTOPB; // one stop bit
     options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;               // 8 data bits
-    options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG); // raw input mode
-    options.c_oflag &= ~OPOST;            // raw output mode
-    options.c_iflag &= ~(IXON | IXOFF | IXANY); // disable flow control
+    options.c_cflag |= CS8;     // 8 data bits
+    options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
+    options.c_oflag &= ~OPOST;
+    options.c_iflag &= ~(IXON | IXOFF | IXANY);
     options.c_cc[VMIN] = 0;
-    options.c_cc[VTIME] = 10;             // timeout in deciseconds
+    options.c_cc[VTIME] = 10;   // 1-second total read timeout
     tcsetattr(fd, TCSANOW, &options);
 
     std::cout << "Serial port " << portName << " opened. Reading data..." << std::endl;
 
-    // Buffer to accumulate data from the serial port.
+    // 2. SETUP PARSING (REGEX) FOR SENSOR DATA
     const int bufferSize = 256;
     char buffer[bufferSize];
     std::string lineBuffer;
 
-    // Setup regex patterns to parse the sensor output.
     std::regex accelRegex(R"(Acceleration:\s*X:\s*([-+]?[0-9]*\.?[0-9]+)g,\s*Y:\s*([-+]?[0-9]*\.?[0-9]+)g,\s*Z:\s*([-+]?[0-9]*\.?[0-9]+)g)");
     std::regex lis3dhTempRegex(R"(LIS3DH Temperature:\s*([-+]?[0-9]*\.?[0-9]+))");
     std::regex magRegex(R"(Magnetic Field:\s*X:\s*([-+]?[0-9]*\.?[0-9]+)\s*G,\s*Y:\s*([-+]?[0-9]*\.?[0-9]+)\s*G,\s*Z:\s*([-+]?[0-9]*\.?[0-9]+)\s*G)");
     std::regex lis2mdlTempRegex(R"(LIS2MDL Temperature:\s*([-+]?[0-9]*\.?[0-9]+))");
 
-    // Data containers for sensor readings.
-    // (These are defined in Application_Layer.h as well.)
+    // Data containers for sensor readings
     LIS3DHData lis3dh = {0, 0, 0, 0};
     LIS2MDLData lis2mdl = {0, 0, 0, 0};
 
-    // Main loop: read from the chip and process complete lines.
+    // 3. MAIN LOOP: READ SERIAL, PARSE, BUILD & SEND PACKETS
     while (true) {
         int n = read(fd, buffer, bufferSize - 1);
         if (n < 0) {
-            std::cerr << "Error reading: " << strerror(errno) << std::endl;
+            std::cerr << "Error reading from serial: " << strerror(errno) << std::endl;
             break;
         } else if (n > 0) {
             buffer[n] = '\0';
             lineBuffer.append(buffer);
-            // Check for newline to determine complete lines.
+
+            // Process complete lines
             size_t pos = 0;
             while ((pos = lineBuffer.find('\n')) != std::string::npos) {
                 std::string completeLine = lineBuffer.substr(0, pos);
@@ -80,55 +82,88 @@ int main() {
                     completeLine.pop_back();
                 }
                 std::cout << "Received: " << completeLine << std::endl;
+
+                // 3a. PARSE SENSOR DATA
                 std::smatch match;
                 if (std::regex_search(completeLine, match, accelRegex)) {
                     lis3dh.ax = std::stof(match[1].str());
                     lis3dh.ay = std::stof(match[2].str());
                     lis3dh.az = std::stof(match[3].str());
-                    std::cout << "Parsed Acceleration: X=" << lis3dh.ax << "g, "
-                              << "Y=" << lis3dh.ay << "g, "
-                              << "Z=" << lis3dh.az << "g" << std::endl;
+                    std::cout << "Parsed Acceleration: X=" << lis3dh.ax
+                              << "g, Y=" << lis3dh.ay << "g, Z=" << lis3dh.az << "g\n";
                 } else if (std::regex_search(completeLine, match, lis3dhTempRegex)) {
                     lis3dh.temperature = std::stof(match[1].str());
                     std::cout << "Parsed LIS3DH Temperature: "
-                              << lis3dh.temperature << "°C" << std::endl;
+                              << lis3dh.temperature << "°C\n";
                 } else if (std::regex_search(completeLine, match, magRegex)) {
                     lis2mdl.magX = std::stof(match[1].str());
                     lis2mdl.magY = std::stof(match[2].str());
                     lis2mdl.magZ = std::stof(match[3].str());
-                    std::cout << "Parsed Magnetic Field: X=" << lis2mdl.magX << " G, "
-                              << "Y=" << lis2mdl.magY << " G, "
-                              << "Z=" << lis2mdl.magZ << " G" << std::endl;
+                    std::cout << "Parsed Magnetic Field: X=" << lis2mdl.magX
+                              << " G, Y=" << lis2mdl.magY << " G, Z=" << lis2mdl.magZ << " G\n";
                 } else if (std::regex_search(completeLine, match, lis2mdlTempRegex)) {
                     lis2mdl.temperature = std::stof(match[1].str());
                     std::cout << "Parsed LIS2MDL Temperature: "
-                              << lis2mdl.temperature << "°C" << std::endl;
+                              << lis2mdl.temperature << "°C\n";
                 } else {
                     std::cout << "Ignored: " << completeLine << std::endl;
                 }
-                // Remove the processed line.
+                // Erase processed line from buffer
                 lineBuffer.erase(0, pos + 1);
 
-                // For demonstration, once we have a complete set of readings,
-                // build and print the final packet.
-                // Here, we assume a complete reading is indicated by nonzero acceleration or temperature.
-                if ( (lis3dh.ax != 0 || lis3dh.ay != 0 || lis3dh.az != 0 || lis3dh.temperature != 0) ) {
-                    // --- Application Layer: Encode sensor data into payload.
+                // 3b. BUILD & SEND PACKET if we have valid readings
+                // (Simplified check: any non-zero reading from LIS3DH)
+                if ( (lis3dh.ax != 0.0f) || (lis3dh.ay != 0.0f) ||
+                     (lis3dh.az != 0.0f) || (lis3dh.temperature != 0.0f) )
+                {
+                    // i. Application Layer
                     std::vector<uint8_t> appPayload = encodeApplicationData(lis3dh, lis2mdl);
 
-                    // --- Network Layer: Prepend a header.
-                    // For example, we use PID = 1 for sensor data and set the local flag.
+                    // ii. Network Layer (PID=1, local=true)
                     std::vector<uint8_t> networkPacket = encodeNetworkPacket(1, appPayload, true);
 
-                    // --- Data Link Layer: Frame the network packet.
+                    // iii. Data Link Layer
                     std::vector<uint8_t> framedPacket = framePacket(networkPacket);
 
-                    // Print the final framed packet in hexadecimal.
+                    // Print final framed packet
                     std::cout << "Final Framed Packet: ";
                     for (uint8_t byte : framedPacket) {
                         printf("%02X ", byte);
                     }
                     std::cout << std::endl;
+
+                    // 3c. SEND OVER UDP
+                    //    Open a UDP socket, send to remote IP:port, then close.
+                    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+                    if (sockfd < 0) {
+                        perror("socket creation failed");
+                        continue;
+                    }
+
+                    struct sockaddr_in destAddr;
+                    memset(&destAddr, 0, sizeof(destAddr));
+                    destAddr.sin_family = AF_INET;
+                    destAddr.sin_port = htons(5005);  // <-- set your desired port
+                    // e.g., remote side at 10.240.0.50
+                    if (inet_pton(AF_INET, "10.240.0.50", &destAddr.sin_addr) <= 0) {
+                        std::cerr << "Invalid remote IP address\n";
+                        close(sockfd);
+                        continue;
+                    }
+
+                    ssize_t sentBytes = sendto(sockfd,
+                                               framedPacket.data(),
+                                               framedPacket.size(),
+                                               0,
+                                               (struct sockaddr*)&destAddr,
+                                               sizeof(destAddr));
+                    if (sentBytes < 0) {
+                        perror("sendto failed");
+                    } else {
+                        std::cout << "Sent " << sentBytes
+                                  << " bytes to 10.240.0.50:5005\n";
+                    }
+                    close(sockfd);
                 }
             }
         }
