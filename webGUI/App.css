@@ -1,0 +1,122 @@
+.App {
+  text-align: center;
+}
+
+/* global themes */
+html, body {
+  margin: 0;
+  padding: 0;
+  background-color: #1E1E1E;
+  color: #F0F0F0;
+  font-family: "Roboto", sans-serif;
+}
+
+h1 {
+  color: #FF7043; /* Mars-like accent color */
+  margin: 0;
+  padding: 20px 0 0 0;
+}
+
+
+p {
+  color: #F5F5F5;
+  margin: 8px 0 20px 0;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+/*.GUIContainer{*/
+/*  display: flex;*/
+/*  flex-direction: row;*/
+/*  justify-content: center;*/
+/*}*/
+/* Container for the map and temperature panel */
+.GUIContainer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 20px;
+  background-color: #2A2A2A;
+}
+
+/*.TempContainer{*/
+/*  background-color: aqua;*/
+/*  height: auto;*/
+/*  min-width: 300px;*/
+/*  margin-left: 50px;*/
+/*  margin-right: 50px;*/
+/*}*/
+
+/* Temperature panel styling */
+.TempContainer {
+  width: 240px;
+  min-height: 500px;
+  margin-left: 20px;
+  background-color: #1E1E1E;
+  border: 2px solid #2F2F2F;
+  border-radius: 8px;
+  padding: 16px;
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  flex-direction: column;
+  justify-content: center;
+
+}
+
+
+.TempContainer h2 {
+  margin-top: 0px;
+  color: #FF7043; /* Orange accent for the heading */
+  text-align: center;
+}
+
+
+.TempContainer > div {
+  margin-top: 0px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+
+.leaflet-container {
+  border: 2px solid #2F2F2F;
+  border-radius: 8px;
+}
+
+
+
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
