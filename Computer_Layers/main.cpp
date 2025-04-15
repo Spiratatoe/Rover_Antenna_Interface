@@ -10,26 +10,80 @@
 #include <vector>
 #include <cstdio>
 
-// For UDP sockets on macOS/Linux
+// Sockets for a mac or linux machine, change if windows
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-// Include your layered protocol headers
+// other layers
 #include "Data_Link_Layer.h"   // framePacket(), unframePacket()
 #include "Network_Layer.h"     // encodeNetworkPacket(), decodeNetworkPacket()
-#include "Application_Layer.h" // encodeApplicationData(), LIS3DHData, LIS2MDLData
+#include "Application_Layer.h" // encodeApplicationData(), encodeGPSData(), and sensor/GPS data structs
+
+// parse GPS data
+bool parseGNGGA(const std::string &line, GPSData &gpsOut) {
+    if (line.rfind("$GNGGA", 0) != 0) {
+        return false;
+    }
+    std::vector<std::string> tokens;
+    size_t start = 0;
+    while (true) {
+        size_t pos = line.find(',', start);
+        if (pos == std::string::npos) {
+            tokens.push_back(line.substr(start));
+            break;
+        }
+        tokens.push_back(line.substr(start, pos - start));
+        start = pos + 1;
+    }
+    if (tokens.size() < 10) {
+        return false;
+    }
+    float latRaw = 0.0f;
+    try {
+        latRaw = std::stof(tokens[2]);
+    } catch (...) {
+        return false;
+    }
+    float latDeg = std::floor(latRaw / 100.0f);
+    float latMin = latRaw - (latDeg * 100.0f);
+    float latitude = latDeg + (latMin / 60.0f);
+    if (tokens[3] == "S") {
+        latitude = -latitude;
+    }
+    float lonRaw = 0.0f;
+    try {
+        lonRaw = std::stof(tokens[4]);
+    } catch (...) {
+        return false;
+    }
+    float lonDeg = std::floor(lonRaw / 100.0f);
+    float lonMin = lonRaw - (lonDeg * 100.0f);
+    float longitude = lonDeg + (lonMin / 60.0f);
+    if (tokens[5] == "W") {
+        longitude = -longitude;
+    }
+    float altitude = 0.0f;
+    try {
+        altitude = std::stof(tokens[9]);
+    } catch (...) {
+        altitude = 0.0f;
+    }
+    gpsOut.lat = latitude;
+    gpsOut.lon = longitude;
+    gpsOut.alt = altitude;
+    return true;
+}
 
 int main() {
-    // 1. OPEN & CONFIGURE SERIAL PORT
-    const char* portName = "/dev/tty.usbmodem21401";  // <-- Adjust to your actual device
+    const char* portName = "/dev/tty.usbmodem2101";  // MAKE SURE TO CHANGE TO PORT YOU'RE USING!!!
     int fd = open(portName, O_RDWR | O_NOCTTY | O_NDELAY);
     if (fd == -1) {
         std::cerr << "Error opening serial port " << portName
                   << ": " << strerror(errno) << std::endl;
         return 1;
     }
-    // Make read() blocking
+
     fcntl(fd, F_SETFL, 0);
 
     struct termios options;
@@ -37,20 +91,20 @@ int main() {
     cfsetispeed(&options, B115200);
     cfsetospeed(&options, B115200);
     options.c_cflag |= (CLOCAL | CREAD);
-    options.c_cflag &= ~PARENB; // no parity
-    options.c_cflag &= ~CSTOPB; // one stop bit
+    options.c_cflag &= ~PARENB;
+    options.c_cflag &= ~CSTOPB;
     options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;     // 8 data bits
+    options.c_cflag |= CS8;
     options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
     options.c_oflag &= ~OPOST;
     options.c_iflag &= ~(IXON | IXOFF | IXANY);
     options.c_cc[VMIN] = 0;
-    options.c_cc[VTIME] = 10;   // 1-second total read timeout
+    options.c_cc[VTIME] = 10;   // 1-second timeout
     tcsetattr(fd, TCSANOW, &options);
 
     std::cout << "Serial port " << portName << " opened. Reading data..." << std::endl;
 
-    // 2. SETUP PARSING (REGEX) FOR SENSOR DATA
+    //Parse Sensor Data
     const int bufferSize = 256;
     char buffer[bufferSize];
     std::string lineBuffer;
@@ -63,8 +117,9 @@ int main() {
     // Data containers for sensor readings
     LIS3DHData lis3dh = {0, 0, 0, 0};
     LIS2MDLData lis2mdl = {0, 0, 0, 0};
+    GPSData gps = {0.0f, 0.0f, 0.0f};
 
-    // 3. MAIN LOOP: READ SERIAL, PARSE, BUILD & SEND PACKETS
+    // LOOP: read serial, parse, build & send packets
     while (true) {
         int n = read(fd, buffer, bufferSize - 1);
         if (n < 0) {
@@ -82,9 +137,9 @@ int main() {
                     completeLine.pop_back();
                 }
                 std::cout << "Received: " << completeLine << std::endl;
-
-                // 3a. PARSE SENSOR DATA
                 std::smatch match;
+
+                // Parse sensor data from the line, if applicable
                 if (std::regex_search(completeLine, match, accelRegex)) {
                     lis3dh.ax = std::stof(match[1].str());
                     lis3dh.ay = std::stof(match[2].str());
@@ -105,104 +160,80 @@ int main() {
                     lis2mdl.temperature = std::stof(match[1].str());
                     std::cout << "Parsed LIS2MDL Temperature: "
                               << lis2mdl.temperature << "°C\n";
+                } else if (completeLine.rfind("$GNGGA", 0) == 0) {
+                    if (parseGNGGA(completeLine, gps)) {
+                        std::cout << "Parsed GPS: lat=" << gps.lat
+                                  << ", lon=" << gps.lon
+                                  << ", alt=" << gps.alt << std::endl;
+                    }
                 } else {
                     std::cout << "Ignored: " << completeLine << std::endl;
                 }
-                // Erase processed line from buffer
+                // Remove the processed line
                 lineBuffer.erase(0, pos + 1);
 
-                // 3b. BUILD & SEND PACKET if we have valid readings
-                // (Simplified check: any non-zero reading from LIS3DH)
-                if ( (lis3dh.ax != 0.0f) || (lis3dh.ay != 0.0f) ||
-                     (lis3dh.az != 0.0f) || (lis3dh.temperature != 0.0f) )
-                {
-                    // i. Application Layer
-                    std::vector<uint8_t> appPayload = encodeApplicationData(lis3dh, lis2mdl);
-
-                    // ii. Network Layer (PID=1, local=true)
-                    std::vector<uint8_t> networkPacket = encodeNetworkPacket(1, appPayload, true);
-
-                    // iii. Data Link Layer
-                    std::vector<uint8_t> framedPacket = framePacket(networkPacket);
-
-                    // Print final framed packet
-                    std::cout << "Final Framed Packet: ";
-                    for (uint8_t byte : framedPacket) {
-                        printf("%02X ", byte);
-                    }
-                    std::cout << std::endl;
-
-                    // 3c. SEND OVER UDP
-                    //    Open a UDP socket, send to remote IP:port, then close.
-                    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-                    if (sockfd < 0) {
-                        perror("socket creation failed");
-                        continue;
-                    }
-
-                    struct sockaddr_in destAddr;
-                    memset(&destAddr, 0, sizeof(destAddr));
-                    destAddr.sin_family = AF_INET;
-                    destAddr.sin_port = htons(5005);  // <-- set your desired port
-                    // e.g., remote side at 10.240.0.50
-                    if (inet_pton(AF_INET, "10.240.0.50", &destAddr.sin_addr) <= 0) {
-                        std::cerr << "Invalid remote IP address\n";
-                        close(sockfd);
-                        continue;
-                    }
-
-                    ssize_t sentBytes = sendto(sockfd,
-                                               framedPacket.data(),
-                                               framedPacket.size(),
-                                               0,
-                                               (struct sockaddr*)&destAddr,
-                                               sizeof(destAddr));
-                    if (sentBytes < 0) {
-                        perror("sendto failed");
-                    } else {
-                        std::cout << "Sent " << sentBytes
-                                  << " bytes to 10.240.0.50:5005\n";
-                    }
-                    close(sockfd);
+                // Changed to send data anyways for demo, since gps wouldn't be able to catch at the location
+                // therefore build & send packet ALWAYS (regardless of sensor validity)
+                // For this example, we choose to send GPS data (PID = 2) if available,
+                // otherwise send sensor data (PID = 1). But even if GPS values are zero, we send them.
+                std::vector<uint8_t> appPayload;
+                uint8_t pid = 1;  // default: sensor data
+                // Always send the GPS packet regardless of whether it has nonzero values.
+                if (completeLine.rfind("$GNGGA", 0) == 0) {
+                    appPayload = encodeGPSData(gps);
+                    pid = 2;
+                } else {
+                    appPayload = encodeApplicationData(lis3dh, lis2mdl);
+                    pid = 1;
                 }
+
+                // Build network packet with chosen PID.
+                std::vector<uint8_t> networkPacket = encodeNetworkPacket(pid, appPayload, true);
+
+                // Frame the network packet.
+                std::vector<uint8_t> framedPacket = framePacket(networkPacket);
+
+                // Print the final framed packet.
+                std::cout << "Final Framed Packet: ";
+                for (uint8_t byte : framedPacket) {
+                    printf("%02X ", byte);
+                }
+                std::cout << std::endl;
+
+                // Send the packet over UDP.
+                int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+                if (sockfd < 0) {
+                    perror("socket creation failed");
+                    continue;
+                }
+
+                struct sockaddr_in destAddr;
+                memset(&destAddr, 0, sizeof(destAddr));
+                destAddr.sin_family = AF_INET;
+                destAddr.sin_port = htons(5005);  // Destination port
+                // Set destination IP address (adjust as needed for your network)
+                if (inet_pton(AF_INET, "172.20.10.12", &destAddr.sin_addr) <= 0) {
+                    std::cerr << "Invalid remote IP address\n";
+                    close(sockfd);
+                    continue;
+                }
+
+                ssize_t sentBytes = sendto(sockfd,
+                                           framedPacket.data(),
+                                           framedPacket.size(),
+                                           0,
+                                           (struct sockaddr*)&destAddr,
+                                           sizeof(destAddr));
+                if (sentBytes < 0) {
+                    perror("sendto failed");
+                } else {
+                    std::cout << "Sent " << sentBytes << " bytes to 172.20.10.12:5005\n";
+                }
+                close(sockfd);
             }
         }
     }
 
     close(fd);
-
-
-//start tests here
-
-//    // Create an example network packet with the data bytes:
-//    // [0x55, 0x66, 0x77, 0x88, 0x99, 0xAA]
-//    std::vector<uint8_t> networkPacket = {0x55, 0x66, 0x77, 0x88, 0x99, 0xAA};
-//
-//    // Use the data link layer to frame the network packet.
-//    std::vector<uint8_t> framedPacket = framePacket(networkPacket);
-//
-//    // Print the framed packet in hexadecimal format.
-//    std::cout << "Framed Packet: ";
-//    for (uint8_t byte : framedPacket) {
-//        printf("%02X ", byte);
-//    }
-//    std::cout << std::endl;
-//
-//    // Expected output (in hex):
-//    // 55 06 AA 05 66 77 88 99 AA 0A C5 55
-//
-//    // Test the unframing function: convert the framed packet back into the original network packet.
-//    std::vector<uint8_t> unframedPacket;
-//    bool success = unframePacket(framedPacket, unframedPacket);
-//    if (success) {
-//        std::cout << "Unframed Packet: ";
-//        for (uint8_t byte : unframedPacket) {
-//            printf("%02X ", byte);
-//        }
-//        std::cout << std::endl;
-//    } else {
-//        std::cout << "Unframing failed!" << std::endl;
-//    }
-
     return 0;
 }
